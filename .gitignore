@@ -194,3 +194,5 @@ cython_debug/
 .cursorindexingignore
 
 /data/resume.yml
+
+repomix-output.txt
