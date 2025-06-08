@@ -19,8 +19,9 @@ README.md            ← This file
 requirements.txt     ← Python dependencies
 
 data/                ← Directory for YAML data files
-  ├─ personal_info.yml  ← Candidate personal data for form filling
-  └─ resume.yml         ← Candidate resume data for tailoring
+  ├─ personal_info.yml     ← Candidate personal data for form filling
+  └─ resume.yml            ← Candidate resume data for tailoring
+  └─ job_preferences.yml   ← Job preferences and other information
 
 src/
   ├─ jobs-applier/
@@ -54,11 +55,10 @@ src/
    pip install -r requirements.txt
    ```
 
-3. Create a `.env` file in the project root and add your API credentials (e.g., Google API):
+3. Export your api key:
 
    ```ini
-   GOOGLE_API_KEY=your_google_api_key_here
-   GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
+   setx GOOGLE_API_KEY your_google_api_key_here
    ```
 
 ---
@@ -346,13 +346,3 @@ This pipeline will:
 5. Convert the JSON into a `.docx` file named `<Company>_<Role>_<JobID>.docx` in the project root.
 
 ---
-
-## Contributing
-
-Contributions are welcome! Please open issues or pull requests for improvements, bug fixes, or new features.
-
----
-
-## License
-
-MIT © Praneeth Ravuri
