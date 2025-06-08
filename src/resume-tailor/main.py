@@ -11,8 +11,8 @@ from create_resume_docx import generate_docx_from_json
 
 load_dotenv()
 
-ROOT = Path(__file__).parent
-RESUME = ROOT / "data" / "resume.yml"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+RESUME = PROJECT_ROOT / "data" / "resume.yml"
 
 jd_scraper_agent = Agent(
     model=Gemini(id="gemini-2.0-flash-exp"),

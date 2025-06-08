@@ -193,7 +193,7 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
-/data/resume.yml
+/data/*.yml
 
 repomix-output.txt
 .docx
