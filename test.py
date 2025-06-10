@@ -1,215 +1,235 @@
-from textwrap import dedent
-from agno.agent import Agent, RunResponse
-from agno.models.google import Gemini
-from agno.tools.crawl4ai import Crawl4aiTools
+import asyncio
+from langchain_deepseek import ChatDeepSeek
+from browser_use import Agent, BrowserSession, Controller, ActionResult
+from pydantic import SecretStr, BaseModel
 from dotenv import load_dotenv
-from pathlib import Path
-from agno.utils.pprint import pprint_run_response
-from agno.tools.reasoning import ReasoningTools
-from agno.workflow import Workflow
-from typing import Iterator
-from pathlib import Path
-import json
+import os
+from typing import Dict, List, Optional
 
 load_dotenv()
+api_key = os.getenv("DEEPSEEK_API_KEY")
 
-PROJECT_ROOT = Path(__file__).resolve().parents[0]
-DATA_PATH = PROJECT_ROOT/ "data"
-RESUME_PATH = DATA_PATH / "resume.yml"
+# Base controller for shared functionality
+base_controller = Controller()
 
-class ResumeTailoringWorkflow(Workflow):
+@base_controller.action('Switch to the newest opened tab')
+async def switch_to_newest_tab(browser_session) -> ActionResult:
+    """Switch to the most recently opened tab"""
+    try:
+        pages = browser_session.browser_context.pages
+        if len(pages) > 1:
+            newest_page = pages[-1]
+            await newest_page.bring_to_front()
+            return ActionResult(extracted_content=f"Switched to newest tab: {newest_page.url}")
+        return ActionResult(extracted_content="No new tab to switch to")
+    except Exception as e:
+        return ActionResult(extracted_content=f"Error switching tabs: {str(e)}")
 
-    job_post_scraping_agent: Agent = Agent(
-        name="Job Posting Scraper",
-        model=Gemini(id="gemini-2.0-flash-exp"),
-        markdown=True,
-        description=dedent("""
-        You extract job description, role title, company name, and job ID from job postings.
-        Format your response with clear sections for each piece of information.
-        Do not modify the wording of the job description text; just extract and present it clearly.
-        """),
-        show_tool_calls=True,
-        tools=[Crawl4aiTools(max_length=None)],
-        instructions=dedent("""
-        When scraping job postings, extract and present the information in this format:
-
-        Note:
-            - You need to find the job id from the webpage content and not from the URL.
-            - If the job ID is not available, state "Not provided".
-            - Neatly format the job title, company name, and job ID.
+# Specialized Controllers for different website types
+class JobSiteController(Controller):
+    def __init__(self):
+        super().__init__()
+        # Inherit base actions
+        self.registry.update(base_controller.registry)
         
-        ## Job Details
-        **Role Title:** [extracted title]
-        **Company Name:** [extracted company]
-        **Job ID:** [extracted ID if available]
+    @Controller.action('Extract job information from JobRight')
+    async def extract_jobright_info(self, browser_session) -> ActionResult:
+        """Extract job information specifically from JobRight.ai"""
+        try:
+            page = await browser_session.get_current_page()
+            # JobRight-specific extraction logic
+            job_title = await page.locator('[data-testid="job-title"]').text_content()
+            job_description = await page.locator('[data-testid="job-description"]').text_content()
+            job_id = await page.locator('[data-testid="job-id"]').text_content()
+            
+            return ActionResult(
+                extracted_content=f"Job Title: {job_title}\nJob ID: {job_id}\nJob Description: {job_description}",
+                include_in_memory=True
+            )
+        except Exception as e:
+            return ActionResult(extracted_content=f"Error extracting job info: {str(e)}")
+
+    @Controller.action('Apply to job on JobRight')
+    async def apply_jobright_job(self, application_data: dict, browser_session) -> ActionResult:
+        """Apply to a job on JobRight with provided data"""
+        try:
+            page = await browser_session.get_current_page()
+            # JobRight-specific application logic
+            await page.fill('[name="name"]', application_data.get('name', 'John Doe'))
+            await page.fill('[name="email"]', application_data.get('email', 'john@example.com'))
+            await page.click('[data-testid="submit-application"]')
+            
+            return ActionResult(extracted_content="Application submitted successfully")
+        except Exception as e:
+            return ActionResult(extracted_content=f"Error applying to job: {str(e)}")
+
+class LinkedInController(Controller):
+    def __init__(self):
+        super().__init__()
+        self.registry.update(base_controller.registry)
         
-        ## Job Description
-        [detailed description of responsibilities and requirements]
-        """)
+    @Controller.action('Extract job information from LinkedIn')
+    async def extract_linkedin_info(self, browser_session) -> ActionResult:
+        """Extract job information specifically from LinkedIn"""
+        try:
+            page = await browser_session.get_current_page()
+            # LinkedIn-specific extraction logic
+            job_title = await page.locator('.job-title').text_content()
+            company = await page.locator('.company-name').text_content()
+            description = await page.locator('.job-description').text_content()
+            
+            return ActionResult(
+                extracted_content=f"Job Title: {job_title}\nCompany: {company}\nDescription: {description}",
+                include_in_memory=True
+            )
+        except Exception as e:
+            return ActionResult(extracted_content=f"Error extracting LinkedIn job info: {str(e)}")
+
+class IndeedController(Controller):
+    def __init__(self):
+        super().__init__()
+        self.registry.update(base_controller.registry)
+        
+    @Controller.action('Extract job information from Indeed')
+    async def extract_indeed_info(self, browser_session) -> ActionResult:
+        """Extract job information specifically from Indeed"""
+        # Indeed-specific logic here
+        pass
+
+# Specialized Agent Classes
+class SpecializedAgent:
+    def __init__(self, name: str, controller: Controller, llm, browser_session: BrowserSession):
+        self.name = name
+        self.controller = controller
+        self.llm = llm
+        self.browser_session = browser_session
+        
+    async def execute_task(self, task: str, max_steps: int = 20) -> str:
+        """Execute a specialized task"""
+        agent = Agent(
+            task=task,
+            llm=self.llm,
+            browser_session=self.browser_session,
+            controller=self.controller,
+            max_failures=3,
+            retry_delay=10
+        )
+        
+        result = await agent.run(max_steps=max_steps)
+        return result.final_result() if result.final_result() else "Task completed"
+
+class JobApplicationTeam:
+    def __init__(self, llm, browser_session: BrowserSession):
+        self.llm = llm
+        self.browser_session = browser_session
+        
+        # Create specialized agents
+        self.agents = {
+            'jobright': SpecializedAgent('JobRight Agent', JobSiteController(), llm, browser_session),
+            'linkedin': SpecializedAgent('LinkedIn Agent', LinkedInController(), llm, browser_session),
+            'indeed': SpecializedAgent('Indeed Agent', IndeedController(), llm, browser_session),
+        }
+        
+        # Main coordinator agent
+        self.coordinator = self._create_coordinator()
+    
+    def _create_coordinator(self):
+        """Create the main coordinator agent with delegation capabilities"""
+        coordinator_controller = Controller()
+        
+        @coordinator_controller.action('Delegate task to specialized agent')
+        async def delegate_task(self, website_type: str, task: str, browser_session) -> ActionResult:
+            """Delegate a task to a specialized agent based on website type"""
+            try:
+                if website_type.lower() in self.agents:
+                    agent = self.agents[website_type.lower()]
+                    result = await agent.execute_task(task)
+                    return ActionResult(extracted_content=f"Delegated to {agent.name}: {result}")
+                else:
+                    return ActionResult(extracted_content=f"No specialized agent found for {website_type}")
+            except Exception as e:
+                return ActionResult(extracted_content=f"Delegation error: {str(e)}")
+        
+        return Agent(
+            task="Coordinate job application tasks across different websites",
+            llm=self.llm,
+            browser_session=self.browser_session,
+            controller=coordinator_controller,
+            max_failures=5,
+            retry_delay=15
+        )
+    
+    async def execute_job_search_and_apply(self, target_websites: List[str]) -> Dict[str, str]:
+        """Execute job search and application across multiple websites"""
+        results = {}
+        
+        for website in target_websites:
+            try:
+                if website.lower() == 'jobright':
+                    task = """
+                    1. Go to https://jobright.ai/jobs/recommend
+                    2. Find the first suitable job posting
+                    3. Extract job information (title, description, ID)
+                    4. Apply to the job with sample data
+                    """
+                    result = await self.agents['jobright'].execute_task(task)
+                    results[website] = result
+                    
+                elif website.lower() == 'linkedin':
+                    task = """
+                    1. Go to LinkedIn jobs page
+                    2. Search for relevant positions
+                    3. Extract job information from the first result
+                    4. Apply if possible
+                    """
+                    result = await self.agents['linkedin'].execute_task(task)
+                    results[website] = result
+                    
+                # Add more website-specific logic as needed
+                
+            except Exception as e:
+                results[website] = f"Error: {str(e)}"
+        
+        return results
+
+# Updated main function
+async def main():
+    llm = ChatDeepSeek(
+        base_url='https://api.deepseek.com/v1',
+        model='deepseek-chat', 
+        api_key=SecretStr(api_key)
     )
 
-    jd_analyzer_agent: Agent = Agent(
-        name="Job Description Analyzer",
-        model=Gemini(id="gemini-2.0-flash-exp"),
-        description=dedent("""
-        You are an expert resume analyzer with decades of experience in the HR industry.
-        Your job is to identify skills in a job description and present them in markdown format.
-    """),
-        instructions=dedent("""
-        You need to create a skills-taxonomy framework using the provided markdown job description.
-        Identify the core objectives and the skills critical to performing the roles and responsibilities outlined in that description.
-        Create a comprehensive list of required skills, including both hard skills (e.g., programming languages, frameworks, software methodologies, practices, tools, testing, etc.) and soft skills (e.g., communication, leadership).
-        Organize these skills into broader categories and subcategories. For example:
+    try:
+        # Create shared browser session
+        browser_session = BrowserSession(
+            cdp_url="http://localhost:9222",
+            keep_alive=True,  # Keep browser alive for multiple agents
+            headless=False,
+            wait_for_network_idle_page_load_time=3.0,
+            minimum_wait_page_load_time=1.0,
+            maximum_wait_page_load_time=10.0,
+            wait_between_actions=2.0,
+            highlight_elements=True
+        )
 
-        - **Technical skills**: [data analytics, cloud computing, programming languages]
-        - **Interpersonal skills**: [communication, negotiation, conflict resolution, cross-functional collaboration]
-        - **Leadership skills**: [strategic thinking, team management, decision-making]
-
-        Ensure your categories are exhaustive yet easy to navigate, without over-complicating the framework.
-        Do not wrap the output in codeblocks
-        Return a JSON object containing the company name, role, job id (if available), and skills. The output should look something like this:
-        {
-            "company_name": "...",
-            "role": "...",
-            "job_id": "...",
-            "skills": {
-                "technical_skills": [...],
-                "interpersonal_skills": [...],
-                "leadership_skills": [...],
-                // any other categories as needed
-            }
-        }
-    """),
-        expected_output=dedent("""
-        {
-            "company_name": "Acme Corp",
-            "role": "Software Engineer",
-            "job_id": "123",
-            "skills": {
-                "technical_skills": ["Python", "CI/CD", "Django"],
-                "interpersonal_skills": ["problem-solving", "cross-functional collaboration"],
-                "leadership_skills": ["stakeholder management", "delegation"]
-            }
-        }
-    """)
-    )
-
-    resume_tailor_agent: Agent = Agent(
-        name="Resume Tailor",
-        model=Gemini(id="gemini-2.0-flash-exp"),
-        tools=[ReasoningTools(add_instructions=True)],
-        description=dedent("""
-        You are a resume-tailoring specialist with decades of experience crafting ATS-compliant resumes. 
-        Your job is to identify, change, or add content to a candidate's resume based on the provided skills list. 
-        You must incorporate all the skills mentioned in that list into the candidate's resume.
-
-    """),
-        instructions=dedent("""
-        - You will be given a JSON object containing the job description analysis (jd_analysis) and the candidate's resume.
-        - Go through the candidate's resume and identify which bullet points can accommodate the skills present in jd_analysis.
-        - Limit yourself to five bullet points per work experience and four bullet points per project.
-        - Identify which skills from the jd_analysis JSON you can map to each bullet point in the candidate's resume.
-        - Try to incorporate those skills into existing bullet points, even if it means replacing a less relevant skill.
-        - If you cannot incorporate a specific skill into any existing bullet point, create a new one—keeping the context of the relevant work experience or project in mind.
-        - If you add a new bullet point, remove a less relevant one to maintain the maximum number of bullet points per section.
-        - All technical skills successfully incorporated into bullet points must also be listed in their respective category in the Skills section.
-        - Change the role title of the candidate's most recent work experience to match the role title in the job description.
-        - Remove filler words, buzzwords, and jargon.
-        - Ensure every bullet point includes a quantifying metric. Metrics should be specific and measurable—not vague terms like “reduced manual efforts by X%” or “streamlined workflow by Y%.”
-        - Return the tailored resume in YAML format. Only output the resume—no explanatory text.
-    """),
-        expected_output=dedent("""
-        header:
-        name: "John Doe"
-        contact:
-            - "+1 555 123 4567"
-            - "johndoe@example.com"
-            - "https://johndoe.dev"
-
-        work_experience:
-        - company: "Acme Corp"
-            location: "San Francisco, CA"
-            position: "Software Engineer"
-            start_date: "2021-06"
-            end_date: "2023-08"
-            bullets:
-            - "Developed web applications using Python and React, improving user engagement by 20%."
-            - "Implemented RESTful APIs and integrated them with third-party services."
-        - company: "Beta Solutions"
-            location: "Austin, TX"
-            position: "Backend Developer"
-            start_date: "2019-01"
-            end_date: "2021-05"
-            bullets:
-            - "Designed microservices with Node.js and Docker, reducing deployment times by 30%."
-            - "Collaborated with cross-functional teams to define API contracts and data models."
-
-        education:
-        - institution: "University of Example"
-            location: "Example City, EX"
-            degree: "B.S. in Computer Science"
-            start_date: "2015-08"
-            end_date: "2019-05"
-
-        skills:
-        - name: "Programming Languages"
-            items:
-            - "Python"
-            - "JavaScript"
-            - "Go"
-        - name: "Frameworks & Libraries"
-            items:
-            - "React"
-            - "Express"
-            - "FastAPI"
-
-        projects:
-        - name: "Example Project One"
-            bullets:
-            - "Created a data-visualization dashboard using D3.js."
-            - "Optimized database queries, reducing response time by 50%."
-        - name: "Example Project Two"
-            bullets:
-            - "Developed a mobile app prototype with React Native."
-            - "Integrated push notifications and authentication with OAuth."
-    """)
-    )
-
-    def run(self, link: str) -> str:
+        # Create the job application team
+        job_team = JobApplicationTeam(llm, browser_session)
         
-        scraping_response = self.job_post_scraping_agent.run(f"Here is the job post link: {job_post_link}")
-        print("=== JOB POST SCRAPING ===")
-        print(scraping_response.content)
-        print("="*15)
+        # Execute job search and application across multiple sites
+        target_websites = ['jobright', 'linkedin']  # Add more as needed
+        results = await job_team.execute_job_search_and_apply(target_websites)
+        
+        print("Job Application Results:")
+        for website, result in results.items():
+            print(f"\n{website.upper()}:")
+            print(result)
+            print("-" * 50)
 
-        analysis_response = self.jd_analyzer_agent.run(scraping_response.content)
-        print("=== JOB DESCRIPTION ANALYSIS ===")
-        analysis_response = analysis_response.content.replace('```json', '').replace('```', '')
-        print(analysis_response)
-        print("="*15)
-
-        analysis_json = json.loads(analysis_response)
-
-        resume_path = RESUME_PATH
-        resume_text = resume_path.read_text(encoding='utf-8')
-
-        combined_output = {
-            "jd_analysis" : analysis_json,
-            "resume" : resume_text
-        }
-
-        tailor_response = self.resume_tailor_agent.run(json.dumps(combined_output))
-
-        print("=== TAILORED RESUME ===")
-        print(tailor_response.content)
-
-        return tailor_response.content
-
-
-
-
-job_post_link = "https://jobs.ashbyhq.com/ramp/dbec16c5-4fa8-4e3e-84b2-e57ae8b4918a?src=LinkedIn"
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
-    workflow = ResumeTailoringWorkflow()
-    workflow.run(link=job_post_link)
+    asyncio.run(main())
