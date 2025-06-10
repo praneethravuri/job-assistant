@@ -23,7 +23,7 @@ class GoogleSheetClient:
         if scopes is None:
             scopes = ["https://www.googleapis.com/auth/spreadsheets"]
         if creds_path is None:
-            base_dir = Path(__file__).resolve().parent.parent
+            base_dir = Path(__file__).resolve().parent.parent.parent
             creds_path = base_dir / "credentials.json"
         if sheet_id is None:
             sheet_id = os.getenv("GOOGLE_SHEET_ID")
@@ -68,3 +68,15 @@ class GoogleSheetClient:
         else:
             col = 1
         self.sheet.update_cell(row, col, new_value)
+
+    def get_url(self, row: int) -> str:
+        
+        url = self.read_row(row)[3]
+        return url
+
+if __name__ == "__main__":
+    client = GoogleSheetClient()
+    print(f"Sheet title: {client.sheet.title}")
+    print(f"Total rows: {client.sheet.row_count}")
+    print(f"Row 1 data: {client.read_row(2)}")
+    print(f"URL: {client.get_url(2)}")
